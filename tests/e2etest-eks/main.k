@@ -11,7 +11,7 @@ _items = [
             crossplane.version = "2.0.2-up.5"
             defaultConditions: ["Ready"]
             manifests: [
-                platformawsv1alpha1.EKS{
+                platformawsv1alpha1.Compute{
                     metadata = {
                         name = "configuration-aws-eks"
                         namespace = "default"
@@ -20,13 +20,15 @@ _items = [
                         parameters = {
                             id = "configuration-aws-eks"
                             region = "us-west-2"
-                            accessConfig: {
-                                authenticationMode: "CONFIG_MAP"
-                                bootstrapClusterCreatorAdminPermissions: True
-                            }
+                            engine = "eks"
                             nodes = {
                                 count = 1
-                                instanceType = "t3.small"
+                                size = "small"
+                            }
+                            # standalone: resolve subnets from the Network's
+                            # published status via extra-resources
+                            networkRef = {
+                                id = "configuration-aws-eks"
                             }
                         }
                     }
@@ -38,7 +40,6 @@ _items = [
                     }
                     spec = {
                         parameters = {
-                            id = "configuration-aws-eks"
                             region = "us-west-2"
                         }
                     }

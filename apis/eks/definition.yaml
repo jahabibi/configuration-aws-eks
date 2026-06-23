@@ -1,115 +1,164 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: eks.aws.platform.upbound.io
+  name: computes.aws.platform.upbound.io
 spec:
   group: aws.platform.upbound.io
   names:
     categories:
     - crossplane
-    kind: EKS
-    plural: eks
+    kind: Compute
+    plural: computes
   scope: Namespaced
   versions:
   - name: v1alpha1
     referenceable: true
+    served: true
     schema:
       openAPIV3Schema:
-        description: EKS is the Schema for the EKS API.
+        description: >-
+          Compute provisions a managed Kubernetes cluster. The engine (e.g. EKS)
+          is an implementation detail selected by the composition, not a leaked
+          API surface.
+        type: object
         properties:
           spec:
-            description: EKSSpec defines the desired state of EKS.
+            type: object
+            description: ComputeSpec defines the desired state of Compute.
             properties:
               parameters:
                 type: object
-                description: EKS configuration parameters.
+                description: Compute configuration parameters.
                 properties:
                   id:
                     type: string
-                    description: ID of this Cluster that other objects will use to refer to it.
+                    description: Platform identifier other domains use to reference this cluster.
                   region:
                     type: string
-                    description: Region is the region you'd like your resource to be created in.
-                  accessConfig:
-                    type: object
-                    properties:
-                      bootstrapClusterCreatorAdminPermissions:
-                        type: boolean
-                        description: Whether or not to bootstrap the access config values to the cluster. Default is false.
-                      authenticationMode:
-                        type: string
-                        enum:
-                        - CONFIG_MAP
-                        - API
-                        - API_AND_CONFIG_MAP
-                    default:
-                      bootstrapClusterCreatorAdminPermissions: true
-                      authenticationMode: CONFIG_MAP
-                  iam:
-                    type: object
-                    description: IAM configuration to connect as ClusterAdmin.
-                    properties:
-                      principalArn:
-                        description: The principal ARN to connect as ClusterAdmin.
-                        type: string
-                  managementPolicies:
-                      description: ManagementPolicies for AWS EC2 resources. Defaults to ["*"] which includes all operations (Create, Observe, Update, Delete, LateInitialize). To orphan resources on deletion, use ["Create", "Observe", "Update", "LateInitialize"].
-                      type: array
-                      items:
-                        type: string
-                        enum:
-                          - "*"
-                          - Create
-                          - Observe
-                          - Update
-                          - Delete
-                          - LateInitialize
-                        default: "*"
-                  providerConfigName:
-                    description: Crossplane ProviderConfig to use for provisioning this resources
+                    description: Cloud region, e.g. us-west-2.
+                  engine:
                     type: string
-                    default: default
+                    enum: [eks]
+                    default: eks
+                    description: >-
+                      Compute engine. The platform implements this in Layer 3;
+                      adding another engine later (e.g. ecs) is an additive enum
+                      value, not a new API.
                   version:
-                    description: Kubernetes version
                     type: string
-                    enum:
-                    - "1.35"
-                    - "1.34"                      
-                    - "1.33"
-                    - "1.32"
-                    - "1.31"
+                    enum: ["1.35", "1.34", "1.33", "1.32", "1.31"]
                     default: "1.34"
+                    description: Kubernetes version.
                   nodes:
                     type: object
-                    description: EKS node configuration parameters.
+                    description: Worker node intent.
                     properties:
                       count:
                         type: integer
-                        description: Desired node count, from 1 to 100.
-                      instanceType:
+                        description: Desired node count.
+                      size:
                         type: string
-                        description: instance types associated with the Node Group.
-                        default: t3.small
+                        enum: [small, medium, large]
+                        default: small
+                        description: >-
+                          Node capacity intent. The composition maps this to the
+                          current right instance type (an L3 concern); consumers
+                          express capacity, never a provider instance type.
                     required:
                     - count
-                    - instanceType
+                  adminPrincipals:
+                    type: array
+                    items:
+                      type: string
+                    description: >-
+                      Cloud principals (e.g. IAM role/user ARNs) granted
+                      cluster-admin. "Who can administer this cluster" is consumer
+                      intent; the mapping to the engine's access mechanism (EKS
+                      access entries) is owned by the composition.
+                  reclaimPolicy:
+                    type: string
+                    enum: [Delete, Retain]
+                    default: Delete
+                    description: >-
+                      Outcome intent, using the Kubernetes PersistentVolume
+                      vocabulary. Retain leaves cloud resources in place when this
+                      composite is deleted. The mapping to Crossplane management
+                      policies is an implementation detail owned by the composition
+                      — this field deliberately does NOT echo Crossplane machinery.
+                  networkRef:
+                    type: object
+                    description: >-
+                      Reference to the Network this cluster is placed in, by
+                      platform id. Resolution lives in L3: injected by the
+                      composing parent when nested, or fetched via extra-resources
+                      when standalone.
+                    properties:
+                      id:
+                        type: string
+                        description: Platform id of the Network (its metadata name).
+                    required:
+                    - id
+                  subnetIds:
+                    type: object
+                    description: >-
+                      Resolved subnet placement. Normally injected by the composing
+                      parent from Network.status.zones[] (not hand-authored); for
+                      standalone use it is resolved from networkRef via
+                      extra-resources. Subnet IDs are an AWS-domain identifier, not
+                      a provider-CRD field, so they survive a provider swap.
+                    properties:
+                      public:
+                        type: array
+                        items:
+                          type: string
+                      private:
+                        type: array
+                        items:
+                          type: string
+                  overrides:
+                    type: object
+                    description: >-
+                      Bounded escape hatch with an explicit support boundary, so
+                      operational edge cases have a sanctioned outlet instead of
+                      forcing leaks into the primary contract.
+                    properties:
+                      providerConfigName:
+                        type: string
+                        description: >-
+                          Crossplane ProviderConfig for account/credential
+                          selection. Defaults to "default".
                 required:
                 - id
                 - region
-                - providerConfigName
                 - nodes
             required:
             - parameters
-            type: object
           status:
-              description: A Status represents the observed state
-              properties:
-                eks:
-                  description: Freeform field containing status information for eks
-                  type: object
-                  x-kubernetes-preserve-unknown-fields: true
-              type: object
-        required:
-        - spec
-        type: object
-    served: true
+            type: object
+            description: >-
+              The inter-domain contract — sibling domains (Identity, Ingress)
+              consume these fields instead of reaching into the implementation.
+            properties:
+              clusterName:
+                type: string
+                description: The cluster's name in the cloud, for sibling references.
+              networkId:
+                type: string
+                description: Cloud network id (vpc-...) this cluster is placed in.
+              oidcProviderArn:
+                type: string
+                description: >-
+                  OIDC provider ARN, populated when Identity uses
+                  federationType irsa.
+              clusterSecurityGroupId:
+                type: string
+              connectionConfigName:
+                type: string
+                description: >-
+                  Name of the Kubernetes/Helm ProviderConfig granting in-cluster
+                  access. In-cluster add-ons (e.g. Ingress) target this instead of
+                  hardcoding a name.
+              region:
+                type: string
+              version:
+                type: string

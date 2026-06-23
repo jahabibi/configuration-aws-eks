@@ -16,6 +16,29 @@ params = oxr.spec.parameters
 xrName = oxr.metadata.name
 uid = oxr.metadata.uid or ""
 
+# Inter-domain wiring: subnet placement comes from the Network domain's
+# published status.zones[]. Nested under Cluster the parent injects subnetIds;
+# standalone we fetch the referenced Network via extra-resources and read its
+# status. Either way: no provider-MR label selectors.
+_extra = option("params").extraResources or {}
+_networkXRs = _extra?["network"] or []
+_networkXR = _networkXRs[0] if len(_networkXRs) > 0 else {}
+_networkStatus = _networkXR?.Resource?.status or _networkXR?.status or {}
+_zones = _networkStatus?.zones or []
+_publicSubnetIds = params?.subnetIds?.public or [z.publicSubnetId for z in _zones if z?.publicSubnetId]
+_privateSubnetIds = params?.subnetIds?.private or [z.privateSubnetId for z in _zones if z?.privateSubnetId]
+_networkRefId = params?.networkRef?.id or ""
+
+# reclaimPolicy (PV vocabulary) -> Crossplane v2 management policies. The
+# consumer contract speaks Kubernetes; only this line speaks Crossplane.
+_reclaimPolicy = params?.reclaimPolicy or "Delete"
+_managementPolicies = ["Create", "Observe", "Update", "LateInitialize"] if _reclaimPolicy == "Retain" else ["*"]
+_providerConfigName = params?.overrides?.providerConfigName or "default"
+
+# Node capacity intent -> instance type (L3 mapping; consumers express size).
+_sizeToInstanceType = {small = "t3.small", medium = "t3.large", large = "t3.xlarge"}
+_instanceType = _sizeToInstanceType[params?.nodes?.size or "small"]
+
 _metadata = lambda name: str -> any {
     {
         annotations = {"krm.kcl.dev/composition-resource-name" = name}
@@ -45,12 +68,11 @@ get = lambda x: any, y: str, d: any -> any {
 }
 
 _defaults = {
-    managementPolicies = params.managementPolicies or ["*"]
-    if params.providerConfigName:
-        providerConfigRef = {
-            kind = "ProviderConfig"
-            name = params.providerConfigName
-        }
+    managementPolicies = _managementPolicies
+    providerConfigRef = {
+        kind = "ProviderConfig"
+        name = _providerConfigName
+    }
 }
 
 _items = []
@@ -94,9 +116,11 @@ _items += [
             forProvider = {
                 region = params.region
                 version = params.version
+                # L3 default — access mode is an implementation detail, not a
+                # consumer-facing knob.
                 accessConfig = {
-                    authenticationMode = params.accessConfig.authenticationMode
-                    bootstrapClusterCreatorAdminPermissions = params.accessConfig.bootstrapClusterCreatorAdminPermissions
+                    authenticationMode = "API_AND_CONFIG_MAP"
+                    bootstrapClusterCreatorAdminPermissions = True
                 }
                 roleArnSelector = {
                     matchControllerRef = True
@@ -106,10 +130,9 @@ _items += [
                 }
                 vpcConfig = {
                     endpointPrivateAccess = True
-                    subnetIdSelector.matchLabels = {
-                        "networks.aws.platform.upbound.io/network-id" = params.id
-                        access = "public"
-                    }
+                    # Explicit subnet IDs from Network.status.zones (injected by
+                    # the parent); replaces provider-MR subnetIdSelector coupling.
+                    subnetIds = _publicSubnetIds
                 }
             }
         }
@@ -191,8 +214,8 @@ _items += [
     }
 ]
 
-nodeCount = oxr.spec.parameters.nodes.count or ""
-instanceType = oxr.spec.parameters.nodes.instanceType or ""
+nodeCount = params?.nodes?.count or ""
+instanceType = _instanceType
 
 if ready(get(_ocds, "vpc-cni-addon", "")) or exists("nodeGroupPublic"):
     _items += [
@@ -218,22 +241,21 @@ if ready(get(_ocds, "vpc-cni-addon", "")) or exists("nodeGroupPublic"):
                         minSize = 1
                     }
                     instanceTypes = [instanceType]
-                    subnetIdSelector.matchLabels = {
-                        "networks.aws.platform.upbound.io/network-id" = params.id
-                        access = "public"
-                    }
+                    subnetIds = _publicSubnetIds
                 }
             }
         }
     ]
 
-principalArn = oxr.spec?.parameters?.iam?.principalArn or False
-
-if principalArn:
-    _items += [
+# Cluster-admin grants: one AccessEntry + AccessPolicyAssociation per principal
+# in adminPrincipals. "Who can administer this cluster" is consumer intent; the
+# access-entry wiring is this L3 detail.
+_adminPrincipals = params?.adminPrincipals or []
+_accessFor = lambda p: str -> [any] {
+    [
         eksv1beta1.AccessEntry {
-            # force recreate when principalArn changes
-            metadata = _metadata(crypto.sha256("accessEntry-{}".format(principalArn)))
+            # hash-named to force recreate when the principal changes
+            metadata = _metadata(crypto.sha256("accessEntry-{}".format(p)))
             spec: _defaults | {
                 forProvider = {
                     region = params.region
@@ -241,13 +263,12 @@ if principalArn:
                         matchControllerRef = True
                     }
                     type = "STANDARD"
-                    principalArn = principalArn
+                    principalArn = p
                 }
             }
         }
         eksv1beta1.AccessPolicyAssociation {
-            # force recreate when principalArn changes
-            metadata = _metadata(crypto.sha256("accessPolicyAssociation-{}".format(principalArn)))
+            metadata = _metadata(crypto.sha256("accessPolicyAssociation-{}".format(p)))
             spec: _defaults | {
                 forProvider = {
                     region = params.region
@@ -265,6 +286,8 @@ if principalArn:
             }
         }
     ]
+}
+_items += [e for p in _adminPrincipals for e in _accessFor(p)]
 
 if ready(get(_ocds, "kubernetesClusterAuth", {})) or exists("vpc-cni-addon"):
     _items += [
@@ -418,16 +441,37 @@ _items += [{
         data: {}
 }]
 
-# Update the dxr status.
+# Structured status — the inter-domain contract consumed by Identity & Ingress.
+_clusterMR = _ocds?["kubernetesCluster"]?.Resource or {}
+_vpcConfig = _clusterMR?.status?.atProvider?.vpcConfig or {}
 _dxr = _dxr | {
     status: {
-        eks: {
-            clusterName: _ocds["kubernetesCluster"]?.Resource?.metadata?.name
-            nodeGroupArn: _ocds["nodeGroupPublic"]?.Resource?.status?.atProvider?.arn
-        }
+        clusterName = _clusterMR?.metadata?.annotations?["crossplane.io/external-name"] or _clusterMR?.metadata?.name
+        if _vpcConfig?.vpcId:
+            networkId = _vpcConfig.vpcId
+        if _vpcConfig?.clusterSecurityGroupId:
+            clusterSecurityGroupId = _vpcConfig.clusterSecurityGroupId
+        connectionConfigName = params.id
+        region = params.region
+        version = params.version
     }
 }
 
 _items += [_dxr]
+
+# Standalone: request the referenced Network so subnet placement can be read
+# from its published status.zones[] (skipped when the parent injected subnetIds).
+if _networkRefId and not params?.subnetIds?.public:
+    _items += [{
+        apiVersion: "meta.krm.kcl.dev/v1alpha1"
+        kind: "ExtraResources"
+        requirements: {
+            "network": {
+                apiVersion: "aws.platform.upbound.io/v1alpha1"
+                kind: "Network"
+                matchName: _networkRefId
+            }
+        }
+    }]
 
 items = _items

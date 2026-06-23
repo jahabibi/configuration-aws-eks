@@ -8,7 +8,7 @@ _items = [
         metadata.name: "test-eks-cluster-security-group"
         spec= {
             assertResources: [
-                platformawsv1alpha1.EKS{
+                platformawsv1alpha1.Compute{
                     metadata = {
                         name: "configuration-aws-eks"
                         namespace = "default"
@@ -19,14 +19,7 @@ _items = [
                             region: "us-west-2"
                             nodes: {
                                 count: 1
-                                instanceType: "t3.small"
-                            }
-                            accessConfig: {
-                                authenticationMode: "API_AND_CONFIG_MAP"
-                                bootstrapClusterCreatorAdminPermissions: True
-                            }
-                            iam: {
-                                principalArn: "arn:12345678910-test"
+                                size: "small"
                             }
                         }
                     }
@@ -108,7 +101,7 @@ _items = [
                 }
             ]
             compositionPath: "apis/eks/composition.yaml"
-            xr: platformawsv1alpha1.EKS{
+            xr: platformawsv1alpha1.Compute{
                 metadata: {
                     name: "configuration-aws-eks"
                     namespace: "default"
@@ -119,14 +112,7 @@ _items = [
                         region: "us-west-2"
                         nodes: {
                             count: 1
-                            instanceType: "t3.small"
-                        }
-                        accessConfig: {
-                            authenticationMode: "API_AND_CONFIG_MAP"
-                            bootstrapClusterCreatorAdminPermissions: True
-                        }
-                        iam: {
-                            principalArn: "arn:12345678910-test"
+                            size: "small"
                         }
                     }
                 }

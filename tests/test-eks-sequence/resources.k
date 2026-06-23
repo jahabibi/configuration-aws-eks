@@ -4,6 +4,15 @@ import models.io.upbound.awsm.eks.v1beta1 as eksv1beta1
 import models.io.upbound.awsm.iam.v1beta1 as iamv1beta1
 import models.io.upbound.platform.aws.v1alpha1 as platformawsv1alpha1
 
+# Subnet IDs the parent injects from Network.status.zones[]; the composition
+# now places the cluster and node group on these explicit IDs (no MR-label
+# selectors). Mirrors examples/eks/eks-xr.yaml.
+_publicSubnetIds = [
+    "subnet-0a1b2c3d4e5f00001"
+    "subnet-0a1b2c3d4e5f00002"
+    "subnet-0a1b2c3d4e5f00003"
+]
+
 _kubernetesCluster = eksv1beta1.Cluster {
     metadata = {
         annotations = {
@@ -29,12 +38,7 @@ _kubernetesCluster = eksv1beta1.Cluster {
             }
             vpcConfig = {
                 endpointPrivateAccess = True
-                subnetIdSelector = {
-                    matchLabels = {
-                        access = "public"
-                        "networks.aws.platform.upbound.io/network-id" = "configuration-aws-eks"
-                    }
-                }
+                subnetIds = _publicSubnetIds
             }
         }
         providerConfigRef = {
@@ -44,7 +48,7 @@ _kubernetesCluster = eksv1beta1.Cluster {
     }
 }
 
-_xr = platformawsv1alpha1.EKS {
+_xr = platformawsv1alpha1.Compute {
     metadata = {
         name = "configuration-aws-eks"
         namespace = "default"
@@ -54,9 +58,12 @@ _xr = platformawsv1alpha1.EKS {
             id = "configuration-aws-eks"
             nodes = {
                 count = 1
-                instanceType = "t3.small"
+                size = "small"
             }
             region = "us-west-2"
+            subnetIds = {
+                public = _publicSubnetIds
+            }
         }
     }
 }
@@ -282,10 +289,7 @@ _nodeGroupPublic = eksv1beta1.NodeGroup {
                 minSize = 1
             }
             instanceTypes = ["t3.small"]
-            subnetIdSelector.matchLabels = {
-                "networks.aws.platform.upbound.io/network-id" = "configuration-aws-eks"
-                access = "public"
-            }
+            subnetIds = _publicSubnetIds
         }
         initProvider = {
             scalingConfig = {
