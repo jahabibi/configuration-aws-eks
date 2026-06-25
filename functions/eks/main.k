@@ -470,6 +470,10 @@ if _networkRefId and not params?.subnetIds?.public:
                 apiVersion: "aws.platform.upbound.io/v1alpha1"
                 kind: "Network"
                 matchName: _networkRefId
+                # Network is a namespaced XR; matchNamespace scopes the lookup.
+                # Requires function-kcl >= v0.11.6 (matchNamespace support) — older
+                # runtimes silently drop it, querying cluster-scoped and finding nothing.
+                matchNamespace: oxr.metadata.namespace
             }
         }
     }]
